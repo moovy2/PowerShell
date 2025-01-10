@@ -93,6 +93,10 @@ Describe "ConsoleHost unit tests" -tags "Feature" {
     }
 
     It "Clear-Host does not injects data into PowerShell output stream" {
+        if (Test-IsWindowsArm64) {
+            Set-ItResult -Pending -Because "ARM64 runs in non-interactively mode and Clear-Host does not work."
+        }
+
         & { Clear-Host; 'hi' } | Should -BeExactly 'hi'
     }
 
@@ -170,7 +174,7 @@ Describe "ConsoleHost unit tests" -tags "Feature" {
         It "-File should fail for script without .ps1 extension" -Skip:(!$IsWindows) {
             $Filename = 'test.xxx'
             Set-Content -Path $testdrive/$Filename -Value "'hello'"
-            & $powershell -NoProfile -File $testdrive/$Filename > $null
+            & $powershell -NoProfile -File $testdrive/$Filename 2>&1 $null
             $LASTEXITCODE | Should -Be 64
         }
 
@@ -430,6 +434,27 @@ export $envVarName='$guid'
             $out | Should -Not -BeNullOrEmpty
             $out = $out.Split([Environment]::NewLine)[0]
             [System.Management.Automation.Internal.StringDecorated]::new($out).ToString("PlainText") | Should -BeExactly "Exception: boom"
+        }
+
+        It "Progress is not emitted when stdout is redirected" {
+            $ps = [powershell]::Create()
+            $null = $ps.AddScript('$a = & ([Environment]::ProcessPath) -Command "Write-Progress -Activity progress"; $a')
+            $actual = $ps.Invoke()
+
+            $ps.HadErrors | Should -BeFalse
+            $actual | Should -BeNullOrEmpty
+            $ps.Streams.Progress | Should -BeNullOrEmpty
+        }
+
+        It "Progress is still emitted with redireciton with XML output" {
+            $ps = [powershell]::Create()
+            $null = $ps.AddScript('$a = & ([Environment]::ProcessPath) -OutputFormat xml -Command "Write-Progress -Activity progress"; $a')
+            $actual = $ps.Invoke()
+
+            $ps.HadErrors | Should -BeFalse
+            $actual | Should -BeNullOrEmpty
+            $ps.Streams.Progress.Count | Should -Be 1
+            $ps.Streams.Progress[0].Activity | Should -Be progress
         }
     }
 
@@ -939,6 +964,12 @@ $powershell -c '[System.Management.Automation.Platform]::SelectProductNameForDir
             $out | Should -Be $expected
         }
     }
+
+    It 'Errors for invalid ExecutionPolicy string' {
+        $out = pwsh -nologo -noprofile -executionpolicy NonExistingExecutionPolicy -c 'exit 0' 2>&1
+        $out | Should -Not -BeNullOrEmpty
+        $LASTEXITCODE | Should -Be $ExitCodeBadCommandLineParameter
+    }
 }
 
 Describe "WindowStyle argument" -Tag Feature {
@@ -996,6 +1027,10 @@ public enum ShowWindowCommands : int
             @{WindowStyle="Maximized"}  # hidden doesn't work in CI/Server Core
         ) {
         param ($WindowStyle)
+
+        if (Test-IsWindowsArm64) {
+            Set-ItResult -Pending -Because "All windows are showing up as hidden or ARM64"
+        }
 
         try {
             $ps = Start-Process $powershell -ArgumentList "-WindowStyle $WindowStyle -noexit -interactive" -PassThru
